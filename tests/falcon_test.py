@@ -57,7 +57,7 @@ class TestPathHelpers:
             def on_post(self, req, resp):
                 """A greeting endpoint.
                 ---
-                description: get a greeting
+                description: create a greeting
                 responses:
                     201:
                         description: posted something
@@ -65,7 +65,7 @@ class TestPathHelpers:
                 return "hi"
 
         expected = {
-            "description": "get a greeting",
+            "description": "create a greeting",
             "responses": {"201": {"description": "posted something"}},
         }
         hello_resource = HelloResource()
@@ -81,6 +81,15 @@ class TestPathHelpers:
             ---
             x-extension: global metadata
             """
+            def on_get(self, req, resp):
+                """A greeting endpoint.
+                ---
+                description: get a greeting
+                responses:
+                    200:
+                        description: said hi
+                """
+                return "dummy"
 
         hello_resource = HelloResource()
         app.add_route("/hi", hello_resource)
@@ -88,3 +97,48 @@ class TestPathHelpers:
         spec.path(resource=hello_resource)
 
         assert spec._paths["/hi"]["x-extension"] == "global metadata"
+
+    def test_multiple_routes_per_resource(self, app, spec_factory):
+        class HelloResource:
+            def on_get_retrieve(self, req, resp):
+                """A greeting endpoint.
+                ---
+                description: get a greeting
+                responses:
+                    200:
+                        description: said hi
+                """
+                return "dummy"
+
+            def on_post_create(self, req, resp):
+                """A greeting endpoint.
+                ---
+                description: create a greeting
+                responses:
+                    201:
+                        description: posted something
+                """
+                return "hi"
+
+        hello_resource = HelloResource()
+        app.add_route("/hi/create", hello_resource, suffix = 'create')
+        app.add_route("/hi", hello_resource, suffix = 'retrieve')
+        spec = spec_factory(app)
+        spec.path(resource = hello_resource, suffix = 'create')
+        spec.path(resource = hello_resource, suffix = 'retrieve')
+
+        get_expected = {
+            "description": "get a greeting",
+            "responses": {"200": {"description": "said hi"}},
+        }
+
+        post_expected = {
+            "description": "create a greeting",
+            "responses": {"201": {"description": "posted something"}},
+        }
+
+        assert spec._paths["/hi"]["get"] == get_expected
+        assert spec._paths["/hi/create"]["post"] == post_expected
+        assert len(spec._paths["/hi"]) == 1
+        assert len(spec._paths["/hi/create"]) == 1
+        assert len(spec._paths) == 2

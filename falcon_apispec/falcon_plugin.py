@@ -1,4 +1,9 @@
+"""
+Note that while this works, it's a hacky solution. I've got a PR in progress with the apispec team for "proper" falcon support.
+"""
+
 import copy
+from collections import defaultdict
 
 from apispec import BasePlugin, yaml_utils
 from apispec.exceptions import APISpecError
@@ -12,32 +17,52 @@ class FalconPlugin(BasePlugin):
         super(FalconPlugin, self).__init__()
         self._app = app
 
-    @staticmethod
-    def _generate_resource_uri_mapping(app):
-        routes_to_check = copy.copy(app._router._roots)
+    def path_helper(self, path, operations, resource, suffix = None, **kwargs):
+        """Path helper that allows passing a Falcon resource instance."""
+        path = None
+        methods = {}
 
-        mapping = {}
+        routes_to_check = copy.copy(self._app._router._roots)
+
         for route in routes_to_check:
-            uri = route.uri_template
-            resource = route.resource
-            mapping[resource] = uri
             routes_to_check.extend(route.children)
 
-        return mapping
+        operations.update(yaml_utils.load_operations_from_docstring(resource.__doc__) or {})
 
-    def path_helper(self, operations, resource, **kwargs):
-        """Path helper that allows passing a Falcon resource instance."""
-        resource_uri_mapping = self._generate_resource_uri_mapping(self._app)
+        for route in routes_to_check:
+            if route.resource == resource:
+                # found a match
+                if path and not suffix:
+                    raise APISpecError("Suffix required when multiple paths route to resource")
 
-        if resource not in resource_uri_mapping:
+                method_map = route.method_map
+
+                if suffix:
+                    # see if this set of methods ends with the provided suffix.
+                    for verb, method in method_map.items():
+                        method_name: str = method.__name__
+                        if method_name in ['method_not_allowed', 'on_options']:
+                            continue  # not an implemented verb
+
+                        if method_name.endswith(suffix):
+                            # match. Make sure that we either don't have a path, or we have the same path
+                            if not path or path == route.uri_template:
+                                path = route.uri_template
+                                methods[verb.lower()] = method_name
+                            else:
+                                raise APISpecError("suffix routed to multiple paths somehow")
+                else:
+                    for verb, method in method_map.items():
+                        method_name: str = method.__name__
+                        if method_name in ['method_not_allowed', 'on_options']:
+                            continue  # not an implemented verb
+                        path = route.uri_template
+                        methods[verb.lower()] = method_name
+
+        if not path:
             raise APISpecError("Could not find endpoint for resource {0}".format(resource))
 
-        operations.update(yaml_utils.load_operations_from_docstring(resource.__doc__) or {})
-        path = resource_uri_mapping[resource]
-
-        for method in falcon.constants.HTTP_METHODS:
-            http_verb = method.lower()
-            method_name = "on_" + http_verb
+        for http_verb, method_name in methods.items():
             if getattr(resource, method_name, None) is not None:
                 method = getattr(resource, method_name)
                 docstring_yaml = yaml_utils.load_yaml_from_docstring(method.__doc__)
